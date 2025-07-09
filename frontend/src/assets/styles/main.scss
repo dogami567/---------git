@@ -1,0 +1,146 @@
+/* 重置样式 */
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body {
+  height: 100%;
+  font-family: 'Helvetica Neue', Helvetica, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', '微软雅黑', Arial, sans-serif;
+  font-size: 16px;
+  line-height: 1.5;
+  color: #303133;
+  background-color: #f5f7fa;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+a {
+  color: #409EFF;
+  text-decoration: none;
+  transition: color 0.3s;
+  
+  &:hover {
+    color: #66b1ff;
+  }
+}
+
+/* 通用容器 */
+.container {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 0 20px;
+}
+
+.page-container {
+  padding: 20px 0;
+}
+
+/* 卡片样式 */
+.card {
+  background-color: #fff;
+  border-radius: 4px;
+  box-shadow: 0 2px 12px 0 rgba(0, 0, 0, 0.1);
+  padding: 20px;
+  margin-bottom: 20px;
+}
+
+/* 标题样式 */
+.page-title {
+  font-size: 1.8rem;
+  margin-bottom: 20px;
+  color: #303133;
+}
+
+.section-title {
+  font-size: 1.4rem;
+  margin-bottom: 15px;
+  color: #303133;
+}
+
+/* 表单样式 */
+.form-group {
+  margin-bottom: 20px;
+}
+
+.form-label {
+  display: block;
+  margin-bottom: 8px;
+  font-weight: 500;
+}
+
+/* 按钮组 */
+.btn-group {
+  display: flex;
+  gap: 10px;
+  margin: 20px 0;
+}
+
+/* 响应式栅格 */
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  margin: 0 -10px;
+}
+
+.col {
+  padding: 0 10px;
+  flex: 1;
+  
+  &-1 { flex: 0 0 8.333333%; max-width: 8.333333%; }
+  &-2 { flex: 0 0 16.666667%; max-width: 16.666667%; }
+  &-3 { flex: 0 0 25%; max-width: 25%; }
+  &-4 { flex: 0 0 33.333333%; max-width: 33.333333%; }
+  &-6 { flex: 0 0 50%; max-width: 50%; }
+  &-8 { flex: 0 0 66.666667%; max-width: 66.666667%; }
+  &-9 { flex: 0 0 75%; max-width: 75%; }
+  &-12 { flex: 0 0 100%; max-width: 100%; }
+}
+
+/* 辅助类 */
+.text-center { text-align: center; }
+.text-right { text-align: right; }
+.text-left { text-align: left; }
+
+.mt-1 { margin-top: 0.5rem; }
+.mt-2 { margin-top: 1rem; }
+.mt-3 { margin-top: 1.5rem; }
+.mt-4 { margin-top: 2rem; }
+
+.mb-1 { margin-bottom: 0.5rem; }
+.mb-2 { margin-bottom: 1rem; }
+.mb-3 { margin-bottom: 1.5rem; }
+.mb-4 { margin-bottom: 2rem; }
+
+/* 响应式调整 */
+@media (max-width: 768px) {
+  .row {
+    flex-direction: column;
+  }
+  
+  .col {
+    max-width: 100%;
+    flex: 0 0 100%;
+  }
+}
+
+/* 自定义滚动条 */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background-color: #f1f1f1;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb {
+  background-color: #c1c1c1;
+  border-radius: 4px;
+  
+  &:hover {
+    background-color: #a8a8a8;
+  }
+} 

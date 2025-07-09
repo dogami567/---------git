@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>测试报告</title>
+    <style>
+body {
+    font-family: Arial, sans-serif;
+    font-size: 12pt;
+    line-height: 1.6;
+    color: #333;
+    margin: 0;
+    padding: 0;
+}
+
+h1, h2, h3, h4, h5, h6 {
+    color: #1a1a1a;
+    margin-top: 1.5em;
+    margin-bottom: 0.5em;
+}
+
+h1 {
+    font-size: 24pt;
+    page-break-before: always;
+    border-bottom: 1px solid #ddd;
+    padding-bottom: 0.3em;
+}
+
+h1:first-of-type {
+    page-break-before: avoid;
+}
+
+h2 {
+    font-size: 20pt;
+    border-bottom: 1px solid #eee;
+}
+
+h3 {
+    font-size: 16pt;
+}
+
+h4 {
+    font-size: 14pt;
+}
+
+p {
+    margin: 1em 0;
+}
+
+ul, ol {
+    margin: 1em 0;
+    padding-left: 2em;
+}
+
+table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 1.5em 0;
+}
+
+table, th, td {
+    border: 1px solid #ddd;
+}
+
+th, td {
+    padding: 0.5em;
+    text-align: left;
+}
+
+th {
+    background-color: #f5f5f5;
+    font-weight: bold;
+}
+
+code {
+    font-family: Consolas, Monaco, 'Andale Mono', monospace;
+    background-color: #f5f5f5;
+    padding: 0.2em 0.4em;
+    border-radius: 3px;
+    font-size: 90%;
+}
+
+pre {
+    background-color: #f5f5f5;
+    padding: 1em;
+    border-radius: 5px;
+    overflow: auto;
+    font-size: 90%;
+}
+
+pre code {
+    background-color: transparent;
+    padding: 0;
+}
+
+blockquote {
+    margin: 1em 0;
+    padding-left: 1em;
+    border-left: 4px solid #ddd;
+    color: #666;
+}
+
+a {
+    color: #0366d6;
+    text-decoration: none;
+}
+
+a:hover {
+    text-decoration: underline;
+}
+
+img {
+    max-width: 100%;
+}
+
+.codehilite {
+    background-color: #f8f8f8;
+    border-radius: 4px;
+    padding: 1em;
+    overflow: auto;
+}
+
+@page {
+    size: A4;
+    margin: 2.5cm 1.5cm;
+    
+    @top-right {
+        content: string(title);
+        font-size: 9pt;
+        color: #888;
+    }
+    
+    @bottom-center {
+        content: counter(page);
+        font-size: 10pt;
+    }
+}
+
+h1 {
+    string-set: title content();
+}
+
+/* 目录样式 */
+.toc {
+    page-break-before: always;
+    page-break-after: always;
+}
+
+.toc a {
+    text-decoration: none;
+    color: #333;
+}
+
+.toc ul {
+    list-style-type: none;
+    padding-left: 1em;
+}
+</style>
+</head>
+<body>
+    <div class="toc">
+<ul>
+<li><a href="#_1">测试报告</a></li>
+<li><a href="#_2">标题</a></li>
+<li><a href="#pdf">PDF导出功能测试报告</a><ul>
+<li><a href="#_3">摘要</a></li>
+<li><a href="#_4">摘要</a></li>
+<li><a href="#_5">内容</a></li>
+<li><a href="#_6">内容</a></li>
+<li><a href="#_7">结论</a></li>
+<li><a href="#_8">结论</a></li>
+</ul>
+</li>
+</ul>
+</div>
+<h1 id="_1">测试报告</h1>
+<p>这是一个用于测试PDF导出功能的报告模板</p>
+<h1 id="_2">标题</h1>
+<h1 id="pdf">PDF导出功能测试报告</h1>
+<h2 id="_3">摘要</h2>
+<h2 id="_4">摘要</h2>
+<p>这是一个测试报告，用于验证PDF导出功能是否正常工作。</p>
+<h2 id="_5">内容</h2>
+<h2 id="_6">内容</h2>
+<p>这里是报告的主要内容。</p>
+<ul>
+<li>第一点</li>
+<li>第二点</li>
+<li>第三点</li>
+</ul>
+<h2 id="_7">结论</h2>
+<h2 id="_8">结论</h2>
+<p>测试成功完成，PDF导出功能正常工作。</p>
+</body>
+</html>
