@@ -74,7 +74,7 @@
         <el-table-column prop="status" label="状态"></el-table-column>
         <el-table-column label="操作">
           <template #default="scope">
-            <el-button size="small" type="primary" :disabled="true">下载</el-button>
+            <el-button size="small" type="primary" @click="handleDownload(scope.row)">下载</el-button>
             <el-button size="small" type="danger" @click="handleDelete(scope.row)">删除</el-button>
           </template>
         </el-table-column>
@@ -119,6 +119,53 @@ const rules = reactive({
 })
 
 // --- 函数 ---
+
+/**
+ * @todo: 建议将此函数移至Vuex Store或API服务层
+ * 这是一个临时的下载文件辅助函数。
+ * 它使用fetch API来处理带有认证头的文件下载。
+ * @param {string} url - 要下载的文件的URL
+ * @param {string} filename - 下载后保存的文件名
+ */
+const downloadFile = async (url, filename) => {
+  try {
+    const token = store.state.user.token; // 从store获取认证token
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+      },
+    });
+
+    if (!response.ok) {
+      // 尝试解析错误信息
+      const errorData = await response.json().catch(() => ({ detail: '无法解析错误信息' }));
+      throw new Error(`下载失败: ${response.status} ${response.statusText}. ${errorData.detail}`);
+    }
+
+    const blob = await response.blob();
+    const link = document.createElement('a');
+    link.href = window.URL.createObjectURL(blob);
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    window.URL.revokeObjectURL(link.href);
+    ElMessage.success('下载任务已开始！');
+
+  } catch (error) {
+    console.error('下载文件时出错:', error);
+    ElMessage.error(error.message || '下载文件时出错，请检查控制台。');
+  }
+};
+
+
+// 处理下载报告
+const handleDownload = async (report) => {
+  const downloadUrl = `/api/v1/reports/download/${report.id}`;
+  const filename = `report_${report.id}.pdf`; // 您可以根据报告标题生成更友好的文件名
+  await downloadFile(downloadUrl, filename);
+}
 
 // 初始化数据加载
 const loadInitialData = async () => {

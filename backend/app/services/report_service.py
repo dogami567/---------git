@@ -22,6 +22,8 @@ from backend.app.core.exceptions import ReportGenerationException
 from backend.app.services.report_formatter_service import ReportFormatterService
 from backend.app.models.report import Report, ReportStatusEnum, ReportTemplate as ReportTemplateModel
 from backend.app.schemas.report import CompetitionReportCreate
+from backend.app.models.competition import Competition
+from backend.app.models.user import User
 
 
 # 配置日志
@@ -814,4 +816,44 @@ class ReportService:
         report.status = status
         self.db.commit()
         self.db.refresh(report)
-        return report 
+        return report
+
+    def get_report(self, report_id: int, user_id: int) -> Optional[Report]:
+        """根据ID和用户ID获取报告"""
+        report = self.db.query(Report).filter(Report.id == report_id, Report.user_id == user_id).first()
+        return report
+
+    async def generate_and_get_pdf_path(self, report_id: int) -> str:
+        """为指定报告生成PDF并返回文件路径"""
+        
+        # 假设我们能通过 report_id 获取到报告的所有必需信息
+        # 在实际应用中，这里需要从数据库中获取报告、模板和数据
+        db_report = self.db.query(Report).filter(Report.id == report_id).first()
+        if not db_report:
+            raise ReportGenerationException(f"ID为 {report_id} 的报告未找到")
+
+        # 1. 获取模板
+        # 假设 template_name 存储在 db_report.template_name 或类似字段
+        template = self.get_template_by_name(db_report.template_name)
+
+        # 2. 准备数据
+        # 实际情况会更复杂，需要聚合多个数据源
+        competition_data = self.db.query(Competition).filter(Competition.id == db_report.competition_id).first()
+        user_data = self.db.query(User).filter(User.id == db_report.user_id).first()
+        
+        report_data = {
+            "project_name": competition_data.name if competition_data else "N/A",
+            "team_name": "示例团队", # 示例数据
+            "student_name": user_data.username if user_data else "N/A",
+            "student_id": "0000001", # 示例数据
+            "date": datetime.now().strftime("%Y-%m-%d"),
+            "competition": competition_data.to_dict() if competition_data else {},
+        }
+
+        # 3. 调用核心生成方法
+        pdf_path = self.generate_report(
+            template=template,
+            data=report_data,
+            format=ReportFormat.PDF
+        )
+        return pdf_path 

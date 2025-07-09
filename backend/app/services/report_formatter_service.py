@@ -54,6 +54,14 @@ from backend.app.core.exceptions import ReportGenerationException
 if TYPE_CHECKING:
     from backend.app.services.report_service import ReportSection, ReportTemplate
 
+try:
+    from weasyprint import HTML, CSS
+    from weasyprint.text.fonts import FontConfiguration
+    WEASYPRINT_AVAILABLE = True
+except ImportError:
+    WEASYPRINT_AVAILABLE = False
+    logger.warning("未安装weasyprint库，PDF功能将不可用")
+
 
 class CodeHighlightExtension(Extension):
     """Markdown扩展，用于代码高亮"""
@@ -616,7 +624,7 @@ class ReportFormatterService:
             chart_data: 图表数据
         """
         if not DOCX_AVAILABLE:
-            raise ImportError("未安装python-docx库，无法转换为DOCX格式")
+            raise ReportGenerationException("未安装python-docx库，无法生成DOCX报告")
         
         # 创建文档
         doc = docx.Document()
@@ -975,3 +983,73 @@ class ReportFormatterService:
         # 读取文档内容
         with open(output_path, 'rb') as f:
             return f.read() 
+
+    def markdown_to_pdf(
+        self,
+        markdown_content: str,
+        output_path: str,
+        include_toc: bool = False,
+        include_code_highlighting: bool = True,
+        include_styles: bool = True,
+        include_charts: bool = False,
+        chart_data: Optional[Dict[str, Any]] = None
+    ) -> None:
+        """
+        将Markdown内容转换为PDF文档
+
+        Args:
+            markdown_content: Markdown内容
+            output_path: 输出路径
+            include_toc: 是否包含目录
+            include_code_highlighting: 是否包含代码高亮
+            include_styles: 是否包含样式
+            include_charts: 是否包含图表
+            chart_data: 图表数据
+        """
+        if not WEASYPRINT_AVAILABLE:
+            raise ReportGenerationException("未安装weasyprint库，无法生成PDF报告")
+
+        try:
+            from pygments.formatters import HtmlFormatter
+            import markdown
+
+            # 1. 为代码高亮准备CSS
+            formatter = HtmlFormatter(style="default", full=True, cssclass="codehilite")
+            css_styles = formatter.get_style_defs()
+            
+            # 2. 将Markdown转换为HTML
+            html_content = markdown.markdown(
+                markdown_content, extensions=['toc', 'extra', 'sane_lists']
+            )
+
+            # 3. 将HTML和CSS结合
+            full_html = f"""
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <meta charset="UTF-8">
+                <style>
+                    {css_styles}
+                    /* Add some basic styles for better PDF readability */
+                    body {{ font-family: sans-serif; }}
+                    h1, h2, h3, h4, h5, h6 {{ font-family: sans-serif; }}
+                    pre {{ white-space: pre-wrap; word-wrap: break-word; }}
+                </style>
+            </head>
+            <body>
+                {html_content}
+            </body>
+            </html>
+            """
+
+            # 4. 使用WeasyPrint生成PDF
+            font_config = FontConfiguration()
+            html = HTML(string=full_html, base_url=".")
+            html.write_pdf(output_path, stylesheets=[css], font_config=font_config)
+
+        except ImportError as e:
+            # This will catch missing pygments or markdown
+            raise ReportGenerationException(f"生成PDF失败：缺少必要的库 ({e.name})。请确保已正确安装。")
+        except Exception as e:
+            logger.error(f"PDF生成过程中发生未知错误: {str(e)}")
+            raise ReportGenerationException(f"生成PDF时发生未知错误: {e}") 
