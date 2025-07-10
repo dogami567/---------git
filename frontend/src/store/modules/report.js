@@ -177,18 +177,14 @@ export default {
     },
     
     // 获取报告模板列表
-    async fetchTemplates({ commit, dispatch }) {
+    async fetchTemplates({ commit }) {
       commit('SET_LOADING', true)
       try {
         const response = await api.get('/reports/templates')
         commit('SET_TEMPLATES', response.data)
       } catch (error) {
         console.error('Failed to fetch templates:', error)
-        dispatch('addNotification', { // 使用根调度
-          type: 'error',
-          message: '获取报告模板失败',
-          timeout: 5000
-        }, { root: true })
+        ElMessage.error('获取报告模板失败，请检查网络或联系管理员。');
       } finally {
         commit('SET_LOADING', false)
       }

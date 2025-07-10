@@ -9,10 +9,10 @@ ACCESS_TOKEN = "fake-jwt-token-for-user-3"
 
 # --- 请求数据 ---
 report_payload = {
-    "title": "Automated PDF Test Report",
+    "title": "Automated DOCX Test Report",
     "competition_ids": [1],
     "template_id": 1,
-    "format": "pdf", # <--- 我们现在测试PDF格式
+    "format": "docx", # <--- 我们现在测试DOCX格式
     "included_sections": ["basic_info", "summary", "schedule"]
 }
 
@@ -63,7 +63,7 @@ def run_full_test():
             print(f"✅ 文件下载成功! 状态码: {download_response.status_code}")
 
             # --- 步骤 3: 保存并验证文件 ---
-            output_path = Path(__file__).parent / "test_output.pdf"
+            output_path = Path(__file__).parent / "test_output.docx"
             output_path.write_bytes(download_response.content)
             
             print("\n--- 步骤 3: 验证文件 ---")

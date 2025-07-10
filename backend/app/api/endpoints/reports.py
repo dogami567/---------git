@@ -78,17 +78,17 @@ async def download_report(
     current_user: User = Depends(deps.get_current_active_user),
 ):
     """
-    下载指定ID的报告（PDF格式）
+    下载指定ID的报告，支持所有格式。
     """
     report_service_instance = report_service.ReportService(db)
     
     try:
-        # 调用服务层方法，该方法会处理查找、生成和路径返回
-        file_path, media_type, filename = await report_service_instance.generate_and_get_pdf_path(
+        # 调用通用的服务层方法
+        file_path, media_type, filename = await report_service_instance.generate_and_get_report_path(
             report_id=report_id, user_id=current_user.id
         )
         
-        if not os.path.exists(file_path):
+        if not file_path or not os.path.exists(file_path):
             raise HTTPException(status_code=404, detail="生成的报告文件未找到")
         
         return FileResponse(

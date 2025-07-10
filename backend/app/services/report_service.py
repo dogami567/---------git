@@ -19,11 +19,6 @@ from functools import lru_cache
 from sqlalchemy.orm import Session
 from fastapi import HTTPException, status
 
-try:
-    from pypandoc.exceptions import PandocNotFoundError
-except ImportError:
-    PandocNotFoundError = None
-
 from backend.app.core.config import settings
 from backend.app.core.exceptions import ReportGenerationException
 from backend.app.services.report_formatter_service import ReportFormatterService
@@ -120,14 +115,25 @@ class ReportStructure:
     
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'ReportStructure':
+        # 从 "structure" 键（如果存在）或数据本身获取结构信息
+        structure_data = data.get("structure", data)
+        if not isinstance(structure_data, dict):
+             raise ValueError("用于创建报告结构的数据格式无效。")
+
         template = cls(
-            title=data["title"],
-            description=data.get("description", ""),
-            metadata=data.get("metadata", {})
+            title=structure_data.get("title", ""),  # 优先使用结构内的标题
+            description=structure_data.get("description", ""),
+            metadata=structure_data.get("metadata", {})
         )
-        template.version = data.get("version", "1.0.0")
-        template.created_at = data.get("created_at", datetime.now().isoformat())
-        for section_data in data.get("sections", []):
+
+        # 如果顶层数据中有 'title'，用它来覆盖
+        if 'title' in data and isinstance(data['title'], str):
+            template.title = data['title']
+        
+        template.version = structure_data.get("version", "1.0.0")
+        template.created_at = structure_data.get("created_at", datetime.now().isoformat())
+        
+        for section_data in structure_data.get("sections", []):
             template.add_section(StructureSection.from_dict(section_data))
         return template
     
@@ -240,7 +246,7 @@ class ReportService:
 
     def get_reports_by_user(self, user_id: int) -> List[Report]:
         """获取用户的所有报告"""
-        return self.db.query(Report).filter(Report.owner_id == user_id).all()
+        return self.db.query(Report).filter(Report.owner_id == user_id).order_by(Report.created_at.desc()).all()
 
     @lru_cache(maxsize=32)
     def get_template_by_name(self, name: str) -> ReportStructure:
@@ -471,9 +477,17 @@ class ReportService:
                     import pypandoc
                     # 使用pypandoc将HTML转换为docx
                     pypandoc.convert_text(html_with_style, 'docx', format='html', outputfile=output_path)
-                except (ImportError, OSError, PandocNotFoundError) as e:
-                    self.logger.warning(f"pypandoc 未安装或未找到 Pandoc。DOCX 导出功能受限: {e}")
-                    raise ReportGenerationException("无法生成DOCX，缺少pypandoc或Pandoc。")
+                except (ImportError, OSError) as e:
+                    self.logger.warning(f"pypandoc 或其依赖未找到。DOCX 导出功能受限: {e}")
+                    raise ReportGenerationException("无法生成DOCX，缺少pypandoc或其系统依赖。")
+                except Exception as e:
+                    # 捕获 pypandoc 可能抛出的其他所有异常
+                    # 检查是否为 PandocNotFoundError
+                    if 'PandocNotFoundError' in str(type(e)):
+                         self.logger.warning(f"Pandoc 未安装或未在 PATH 中。DOCX 导出功能受限: {e}")
+                         raise ReportGenerationException("无法生成DOCX，缺少Pandoc程序。")
+                    self.logger.error(f"使用pypandoc生成DOCX时发生未知错误: {e}", exc_info=True)
+                    raise ReportGenerationException(f"生成DOCX时发生未知错误: {e}")
             
             return output_path
 
@@ -621,95 +635,93 @@ class ReportService:
         report = self.db.query(Report).filter(Report.id == report_id, Report.owner_id == user_id).first()
         return report
 
-    async def generate_and_get_pdf_path(self, report_id: int, user_id: int) -> tuple[str, str, str]:
+    async def generate_and_get_report_path(self, report_id: int, user_id: int) -> tuple[str, str, str]:
         """
-        为指定报告生成PDF（如果需要），并返回其文件路径、媒体类型和建议的文件名。
+        为指定报告生成文件并返回其路径、MIME类型和文件名。
+        此方法现在是通用的，可以处理所有支持的报告格式。
         """
-        # 首先，获取报告
         db_report = self.get_report(report_id, user_id)
         if not db_report:
             raise HTTPException(status_code=404, detail="报告未找到")
 
-        # 检查报告格式是否为PDF
-        if db_report.format != ReportFormatEnum.PDF:
-            # 如果不是PDF，可以抛出异常或尝试转换（取决于业务逻辑）
-            # 这里我们简单地认为只有请求PDF格式的报告才能下载
-            raise HTTPException(status_code=400, detail="此报告不是PDF格式，无法下载")
-
-        filename = f"report_{db_report.id}_{datetime.now().strftime('%Y%m%d')}.pdf"
-        cache_file_path = self.cache_dir / filename
+        # 从数据库记录中获取报告格式
+        report_format = ReportFormatEnum(db_report.format)
         
-        # 暂时跳过缓存检查，始终重新生成以进行调试
-        # if cache_file_path.exists():
-        #     return str(cache_file_path), "application/pdf", filename
+        # 定义MIME类型映射
+        mime_types = {
+            ReportFormatEnum.PDF: "application/pdf",
+            ReportFormatEnum.DOCX: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            ReportFormatEnum.MARKDOWN: "text/markdown"
+        }
+        media_type = mime_types.get(report_format, "application/octet-stream")
 
-        # 假设我们总是为PDF报告重新生成或查找
-        # 1. 获取模板
-        try:
-            # 确保通过 relationship 获取模板名称
-            if not db_report.template:
-                raise ReportGenerationException("报告缺少关联的模板")
-            template_name = db_report.template.title
-            template = self.get_template_by_name(template_name)
-        except FileNotFoundError:
-            raise ReportGenerationException(f"报告模板 '{template_name}' 未找到")
-        except Exception as e:
-            logger.error(f"获取报告模板时出错: {e}", exc_info=True)
-            raise ReportGenerationException(f"获取报告模板时出错: {e}")
+        # 动态生成文件名
+        file_extension = report_format.value.lower()
+        filename = f"{db_report.title or 'report'}_{db_report.id}.{file_extension}"
 
-        # 2. 准备报告数据
-        # 实际情况会更复杂，需要聚合多个数据源
-        # 准备上下文数据
-        try:
-            competition_ids = db_report.extra_info.get("competition_ids", [])
-            if not competition_ids:
-                raise ReportGenerationException("报告的 'extra_info' 中缺少 'competition_ids'")
-                
-            # 我们这里只用第一个竞赛的信息作为示例
-            competition_id = competition_ids[0]
-            competition = self.db.query(Competition).filter(Competition.id == competition_id).first()
-            if not competition:
-                raise ReportGenerationException(f"找不到ID为 {competition_id} 的竞赛")
+        # 检查报告模板是否存在
+        template = self.db.query(ReportTemplateModel).filter(ReportTemplateModel.id == db_report.template_id).first()
+        if not template:
+            raise HTTPException(status_code=404, detail=f"ID为 {db_report.template_id} 的模板未找到")
+        
+        template_structure = ReportStructure.from_dict(template.structure)
 
-            context = {
-                "report_title": db_report.title,
-                "competition_name": competition.title,
-                "start_date": competition.start_date.strftime('%Y-%m-%d') if competition.start_date else "N/A",
-                "end_date": competition.end_date.strftime('%Y-%m-%d') if competition.end_date else "N/A",
-                "project_type": "Web应用", # 示例值
-                "project_goal": "开发一个功能完整的Web应用", # 示例值
-                "project_start_date": "2023-01-01", # 示例值
-                "project_end_date": "2023-12-31", # 示例值
-                "project_background": "本项目是基于Flask框架开发的Web应用，旨在提供一个高效、可靠的在线学习平台。",
-                "frontend_tech": "HTML5, CSS3, JavaScript, Bootstrap",
-                "backend_tech": "Python, Flask, SQLAlchemy, PostgreSQL",
-                "database_tech": "PostgreSQL, Redis",
-                "deployment_tech": "Docker, Nginx, Gunicorn",
-                "other_tools": "Git, Jira, Postman",
-                "system_architecture_description": "本项目采用前后端分离架构，前端使用HTML5、CSS3和JavaScript构建，后端使用Python Flask框架处理请求。",
-                "system_components": "前端：HTML5页面，CSS3样式，JavaScript交互；后端：Flask应用，数据库连接，API接口。",
-                "data_flow": "用户请求 -> 前端处理 -> 后端API -> 数据库查询/更新 -> 响应返回",
-                "features_description": "本项目实现了用户注册、登录、课程浏览、课程详情、课程购买等功能。",
-                "implementation_details": "项目采用MVC架构，使用Flask框架处理请求，SQLAlchemy进行数据库操作，Redis缓存热点数据。",
-                "key_algorithms": "用户认证：JWT令牌生成与验证；课程推荐：基于协同过滤的推荐算法。",
-                "challenges_and_solutions": "挑战：数据库连接池管理；解决方案：使用SQLAlchemy连接池，Redis缓存热点数据。",
-                "testing_methodology": "采用单元测试和集成测试相结合的方式，使用pytest框架。",
-                "testing_results": "所有API接口均已通过测试，性能表现良好。",
-                "performance_evaluation": "系统响应时间小于1秒，并发处理能力达到1000QPS。",
-                "conclusion": "本项目成功开发了一个功能完整的Web应用，满足了用户需求。",
-                "future_work": "未来可以考虑添加更多课程内容，优化推荐算法，提升用户体验。",
-                "references": "项目文档：https://github.com/example/project-docs",
-                "appendix": "附录：项目源代码、数据库结构、API文档"
-            }
-        except Exception as e:
-            logger.error(f"准备报告数据时出错: {e}", exc_info=True)
-            raise ReportGenerationException(f"准备报告数据时出错: {e}")
+        # 准备模板数据
+        context = {
+            "report": db_report,
+            "user": db_report.owner,
+            "competitions": self.db.query(Competition).filter(Competition.id.in_(db_report.extra_info.get("competition_ids", []))).all()
+        }
 
-        # 3. 调用核心生成方法
-        pdf_path = self.generate_report(
-            template=template,
+        # --- 新增：确保所有模板变量都存在于上下文中 ---
+        md_template_str = template_structure.to_markdown()
+        # 使用正则表达式查找所有 {{...}} 格式的变量
+        template_variables = set(re.findall(r"\\{\\{\\s*([^\\}]+?)\\s*\\}\\}", md_template_str))
+        
+        for var in template_variables:
+            # 对于嵌套变量如 "user.name"，我们只检查根变量 "user"
+            root_var = var.split('.')[0]
+            if root_var not in context:
+                self.logger.warning(f"模板变量 '{var}' 在上下文中缺失，将使用空字符串填充。")
+                context[root_var] = ""
+        # --- 修复结束 ---
+
+        # 定义缓存文件路径
+        cache_key = self._generate_cache_key(
+            template=template_structure,
             data=context,
-            format=ReportFormatEnum.PDF,
+            format=report_format,
+            # 为缺失的参数提供默认值
+            include_toc=False,
+            include_code_highlighting=False,
+            include_styles=True, # 默认启用样式
+            include_charts=False,
+            chart_data=None
+        )
+        cache_file_path = self.cache_dir / f"{cache_key}.{file_extension}"
+
+        # 如果缓存文件已存在，直接返回路径
+        if cache_file_path.exists():
+            return str(cache_file_path), media_type, filename
+
+        # 调用核心生成方法
+        generated_path = self.generate_report(
+            template=template_structure,
+            data=context,
+            format=report_format,
             output_path=str(cache_file_path)
         )
-        return pdf_path, "application/pdf", filename 
+        
+        if not generated_path:
+             raise ReportGenerationException("报告文件生成失败，未返回有效路径。")
+
+        return generated_path, media_type, filename
+
+    def get_user_reports_paginated(self, user_id: int, page: int, page_size: int):
+        """
+        分页获取指定用户的报告列表。
+        """
+        # 这里需要实现分页逻辑，例如：
+        # total_reports = self.db.query(Report).filter(Report.owner_id == user_id).count()
+        # reports = self.db.query(Report).filter(Report.owner_id == user_id).offset((page - 1) * page_size).limit(page_size).all()
+        # return total_reports, reports 
