@@ -9,6 +9,8 @@ import re
 import json
 import logging
 import hashlib
+import jinja2
+import markdown
 from enum import Enum
 from typing import List, Dict, Any, Optional, Union, Tuple
 from pathlib import Path
@@ -17,10 +19,15 @@ from functools import lru_cache
 from sqlalchemy.orm import Session
 from fastapi import HTTPException, status
 
+try:
+    from pypandoc.exceptions import PandocNotFoundError
+except ImportError:
+    PandocNotFoundError = None
+
 from backend.app.core.config import settings
 from backend.app.core.exceptions import ReportGenerationException
 from backend.app.services.report_formatter_service import ReportFormatterService
-from backend.app.models.report import Report, ReportStatusEnum, ReportTemplate as ReportTemplateModel
+from backend.app.models.report import Report, ReportStatusEnum, ReportFormatEnum, ReportTemplate as ReportTemplateModel
 from backend.app.schemas.report import CompetitionReportCreate
 from backend.app.models.competition import Competition
 from backend.app.models.user import User
@@ -30,71 +37,29 @@ from backend.app.models.user import User
 logger = logging.getLogger(__name__)
 
 
-class ReportFormat(str, Enum):
-    """报告格式枚举"""
-    MARKDOWN = "markdown"
-    DOCX = "docx"
-    PDF = "pdf"  # 新增PDF格式支持
-
-
-class ReportSection:
+class StructureSection:
     """
-    报告部分类
-    
-    表示报告中的一个部分，包括标题、内容和子部分。
-    支持嵌套结构，可以构建复杂的报告层次。
+    报告结构中的一个部分
     """
     
     def __init__(self, title: str, content: str = "", level: int = 1):
-        """
-        初始化报告部分
-        
-        Args:
-            title: 部分标题
-            content: 部分内容
-            level: 标题级别（1-6）
-        """
         self.title = title
         self.content = content
-        self.level = max(1, min(6, level))  # 确保级别在1-6之间
-        self.subsections: List[ReportSection] = []
+        self.level = max(1, min(6, level))
+        self.subsections: List['StructureSection'] = []
     
-    def add_subsection(self, subsection: 'ReportSection') -> None:
-        """
-        添加子部分
-        
-        Args:
-            subsection: 子部分
-        """
+    def add_subsection(self, subsection: 'StructureSection') -> None:
         self.subsections.append(subsection)
     
     def to_markdown(self) -> str:
-        """
-        将部分转换为Markdown格式
-        
-        Returns:
-            str: Markdown格式的部分内容
-        """
-        # 创建标题
-        md = f"{'#' * self.level} {self.title}\n\n"
-        
-        # 添加内容
+        md = f"{'#' * self.level} {self.title}\\n\\n"
         if self.content:
-            md += f"{self.content}\n\n"
-        
-        # 添加子部分
+            md += f"{self.content}\\n\\n"
         for subsection in self.subsections:
             md += subsection.to_markdown()
-        
         return md
     
     def to_dict(self) -> Dict[str, Any]:
-        """
-        将部分转换为字典格式，用于序列化
-        
-        Returns:
-            Dict[str, Any]: 字典格式的部分内容
-        """
         return {
             "title": self.title,
             "content": self.content,
@@ -103,96 +68,47 @@ class ReportSection:
         }
     
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> 'ReportSection':
-        """
-        从字典创建部分
-        
-        Args:
-            data: 字典格式的部分内容
-            
-        Returns:
-            ReportSection: 创建的部分
-        """
+    def from_dict(cls, data: Dict[str, Any]) -> 'StructureSection':
         section = cls(
             title=data["title"],
             content=data.get("content", ""),
             level=data.get("level", 1)
         )
-        
-        # 添加子部分
         for subsection_data in data.get("subsections", []):
             section.add_subsection(cls.from_dict(subsection_data))
-        
         return section
 
 
-class ReportTemplate:
+class ReportStructure:
     """
-    报告模板类
-    
-    定义报告的整体结构，包括标题、描述、元数据和各部分内容。
-    可以序列化为JSON格式以便存储和传输。
+    报告的整体结构，用于构建和序列化。
     """
     
     def __init__(self, title: str, description: str = "", metadata: Dict[str, Any] = None):
-        """
-        初始化报告模板
-        
-        Args:
-            title: 模板标题
-            description: 模板描述
-            metadata: 元数据
-        """
         self.title = title
         self.description = description
         self.metadata = metadata or {}
-        self.sections: List[ReportSection] = []
-        self.version = "1.1.0"  # 添加版本号便于后续升级时的兼容性处理
+        self.sections: List[StructureSection] = []
+        self.version = "1.1.0"
         self.created_at = datetime.now().isoformat()
     
-    def add_section(self, section: ReportSection) -> None:
-        """
-        添加部分
-        
-        Args:
-            section: 部分
-        """
+    def add_section(self, section: StructureSection) -> None:
         self.sections.append(section)
     
     def to_markdown(self) -> str:
-        """
-        将模板转换为Markdown格式
-        
-        Returns:
-            str: Markdown格式的模板内容
-        """
-        # 创建标题
-        md = f"# {self.title}\n\n"
-        
-        # 添加描述（如果有）
+        md = f"# {self.title}\\n\\n"
         if self.description:
-            md += f"{self.description}\n\n"
-        
-        # 添加元数据（如果有）
+            md += f"{self.description}\\n\\n"
         if self.metadata:
-            md += "## 元数据\n\n"
+            md += "## 元数据\\n\\n"
             for key, value in self.metadata.items():
-                md += f"- **{key}**: {value}\n"
-            md += "\n"
-        
-        # 添加部分
+                md += f"- **{key}**: {value}\\n"
+            md += "\\n"
         for section in self.sections:
             md += section.to_markdown()
-        
         return md
     
     def to_dict(self) -> Dict[str, Any]:
-        """
-        将模板转换为字典格式，用于序列化
-        
-        Returns:
-            Dict[str, Any]: 字典格式的模板内容
-        """
         return {
             "title": self.title,
             "description": self.description,
@@ -203,61 +119,31 @@ class ReportTemplate:
         }
     
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> 'ReportTemplate':
-        """
-        从字典创建模板
-        
-        Args:
-            data: 字典格式的模板内容
-            
-        Returns:
-            ReportTemplate: 创建的模板
-        """
+    def from_dict(cls, data: Dict[str, Any]) -> 'ReportStructure':
         template = cls(
             title=data["title"],
             description=data.get("description", ""),
             metadata=data.get("metadata", {})
         )
-        
-        # 添加版本和创建时间
         template.version = data.get("version", "1.0.0")
         template.created_at = data.get("created_at", datetime.now().isoformat())
-        
-        # 添加部分
         for section_data in data.get("sections", []):
-            template.add_section(ReportSection.from_dict(section_data))
-        
+            template.add_section(StructureSection.from_dict(section_data))
         return template
     
     def save_to_file(self, file_path: str) -> None:
-        """
-        将模板保存到文件
-        
-        Args:
-            file_path: 文件路径
-        """
         with open(file_path, "w", encoding="utf-8") as f:
             json.dump(self.to_dict(), f, ensure_ascii=False, indent=2)
     
     @classmethod
-    def load_from_file(cls, file_path: str) -> 'ReportTemplate':
-        """
-        从文件加载模板
-        
-        Args:
-            file_path: 文件路径
-            
-        Returns:
-            ReportTemplate: 加载的模板
-        """
+    def load_from_file(cls, file_path: str) -> 'ReportStructure':
         try:
             with open(file_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
-            
             return cls.from_dict(data)
-        except Exception as e:
-            logger.error(f"加载模板文件失败：{str(e)}")
-            raise ReportGenerationException(f"加载模板文件失败：{str(e)}")
+        except (FileNotFoundError, json.JSONDecodeError) as e:
+            logger.error(f"加载报告结构文件失败: {file_path}, error: {e}")
+            raise
 
 
 def delete_report(db: Session, report_id: int, user_id: int):
@@ -313,45 +199,51 @@ class ReportService:
             db: 数据库会话
         """
         self.db = db
+        self.logger = logger
         self.formatter = ReportFormatterService()
         self.reports_dir = Path(settings.REPORTS_DIR)
-        self.cache_dir = Path(settings.REPORTS_CACHE_DIR)
-        self.templates_dir = Path(settings.REPORTS_TEMPLATES_DIR)
-        
-        # 确保目录存在
         self.reports_dir.mkdir(parents=True, exist_ok=True)
-        self.cache_dir.mkdir(parents=True, exist_ok=True)
+        self.templates_dir = Path(settings.REPORTS_TEMPLATES_DIR)
         self.templates_dir.mkdir(parents=True, exist_ok=True)
+        self.cache_dir = self.reports_dir / "cache"
+        self.cache_dir.mkdir(exist_ok=True)
     
     def create_competition_report(self, report_in: CompetitionReportCreate, user_id: int) -> Report:
-        """
-        在数据库中创建竞赛报告记录。
-        """
-        # 创建报告对象
+        """为指定竞赛创建新的报告"""
+        
+        # 验证竞赛ID是否存在
+        competitions = self.db.query(Competition).filter(Competition.id.in_(report_in.competition_ids)).all()
+        if len(competitions) != len(set(report_in.competition_ids)):
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="一个或多个竞赛ID未找到"
+            )
+
+        extra_data = {
+            "competition_ids": report_in.competition_ids,
+            "included_sections": report_in.included_sections
+        }
+        
         db_report = Report(
             title=report_in.title,
-            format=report_in.format,
-            status=ReportStatusEnum.PENDING,
             owner_id=user_id,
-            extra_info={
-                "competition_ids": report_in.competition_ids,
-                "template_id": report_in.template_id,
-                "included_sections": report_in.included_sections,
-            }
+            template_id=report_in.template_id,
+            status=ReportStatusEnum.PENDING,
+            format=report_in.format.value,
+            extra_info=extra_data
         )
         self.db.add(db_report)
         self.db.commit()
         self.db.refresh(db_report)
+        
         return db_report
 
     def get_reports_by_user(self, user_id: int) -> List[Report]:
-        """
-        根据用户ID获取其所有报告
-        """
-        return self.db.query(Report).filter(Report.owner_id == user_id).order_by(Report.created_at.desc()).all()
+        """获取用户的所有报告"""
+        return self.db.query(Report).filter(Report.owner_id == user_id).all()
 
     @lru_cache(maxsize=32)
-    def get_template_by_name(self, name: str) -> ReportTemplate:
+    def get_template_by_name(self, name: str) -> ReportStructure:
         """
         根据名称获取模板
         
@@ -359,18 +251,28 @@ class ReportService:
             name: 模板名称
             
         Returns:
-            ReportTemplate: 模板对象
+            ReportStructure: 模板对象
             
         Raises:
             ValueError: 如果模板不存在
         """
-        template_path = self.templates_dir / f"{name}.json"
-        if not template_path.exists():
-            raise ValueError(f"模板不存在：{name}")
+        template_file = self.templates_dir / f"{name}.json"
         
-        return ReportTemplate.load_from_file(str(template_path))
+        if not template_file.exists():
+            db_template = self.db.query(ReportTemplateModel).filter(ReportTemplateModel.title == name).first()
+            if not db_template:
+                raise FileNotFoundError(f"模板 '{name}' 在文件或数据库中均未找到。")
+            
+            template_data = db_template.structure
+            # 确保将数据库中的title字段也包含进去
+            if isinstance(template_data, dict):
+                template_data['title'] = db_template.title
+
+            return ReportStructure.from_dict(template_data)
+
+        return ReportStructure.load_from_file(str(template_file))
     
-    def save_template(self, template: ReportTemplate, name: str) -> str:
+    def save_template(self, template: ReportStructure, name: str) -> str:
         """
         保存模板
         
@@ -381,34 +283,29 @@ class ReportService:
         Returns:
             str: 模板文件路径
         """
-        template_path = self.templates_dir / f"{name}.json"
-        template.save_to_file(str(template_path))
+        file_path = self.templates_dir / f"{name}.json"
+        template.save_to_file(str(file_path))
         
         # 清除缓存
         self.get_template_by_name.cache_clear()
         
-        return str(template_path)
+        return str(file_path)
     
-    def create_project_report_template(self) -> ReportTemplate:
+    def create_project_report_template(self) -> ReportStructure:
         """
         创建项目报告模板
         
         Returns:
-            ReportTemplate: 项目报告模板
+            ReportStructure: 项目报告模板
         """
-        template = ReportTemplate(
-            title="{{project_name}} - 项目报告",
-            description="本报告由系统自动生成，包含项目的基本信息和详细说明。",
-            metadata={
-                "作者": "{{author}}",
-                "日期": "{{date}}",
-                "项目ID": "{{project_id}}",
-                "生成时间": "{{generation_date}}"
-            }
+        template = ReportStructure(
+            title="项目周报",
+            description="一个标准的项目周报模板，用于跟踪项目进度。",
+            metadata={"version": "1.0", "author": "系统内置"}
         )
         
         # 添加项目概述部分
-        overview_section = ReportSection(
+        overview_section = StructureSection(
             title="项目概述",
             content=(
                 "本项目是一个{{project_type}}，主要目标是{{project_goal}}。\n"
@@ -422,7 +319,7 @@ class ReportService:
         template.add_section(overview_section)
         
         # 添加技术栈部分
-        tech_stack_section = ReportSection(
+        tech_stack_section = StructureSection(
             title="技术栈",
             content=(
                 "本项目使用了以下技术栈：\n"
@@ -437,7 +334,7 @@ class ReportService:
         template.add_section(tech_stack_section)
         
         # 添加系统架构部分
-        architecture_section = ReportSection(
+        architecture_section = StructureSection(
             title="系统架构",
             content=(
                 "{{system_architecture_description}}\n"
@@ -454,14 +351,14 @@ class ReportService:
         template.add_section(architecture_section)
         
         # 添加功能特性部分
-        features_section = ReportSection(
+        features_section = StructureSection(
             title="功能特性",
             content="{{features_description}}"
         )
         template.add_section(features_section)
         
         # 添加实现细节部分
-        implementation_section = ReportSection(
+        implementation_section = StructureSection(
             title="实现细节",
             content=(
                 "{{implementation_details}}\n"
@@ -478,7 +375,7 @@ class ReportService:
         template.add_section(implementation_section)
         
         # 添加测试与评估部分
-        testing_section = ReportSection(
+        testing_section = StructureSection(
             title="测试与评估",
             content=(
                 "{{testing_methodology}}\n"
@@ -495,7 +392,7 @@ class ReportService:
         template.add_section(testing_section)
         
         # 添加结论与展望部分
-        conclusion_section = ReportSection(
+        conclusion_section = StructureSection(
             title="结论与展望",
             content=(
                 "{{conclusion}}\n"
@@ -508,14 +405,14 @@ class ReportService:
         template.add_section(conclusion_section)
         
         # 添加参考文献部分
-        references_section = ReportSection(
+        references_section = StructureSection(
             title="参考文献",
             content="{{references}}"
         )
         template.add_section(references_section)
         
         # 添加附录部分
-        appendix_section = ReportSection(
+        appendix_section = StructureSection(
             title="附录",
             content="{{appendix}}"
         )
@@ -523,165 +420,72 @@ class ReportService:
         
         return template
     
-    def generate_report(
-        self,
-        template: ReportTemplate,
-        data: Dict[str, Any],
-        format: ReportFormat = ReportFormat.MARKDOWN,
-        output_path: Optional[str] = None,
-        include_toc: bool = True,
-        include_code_highlighting: bool = True,
-        include_styles: bool = True,
-        include_charts: bool = False,
-        chart_data: Optional[Dict[str, Any]] = None,
-        use_cache: bool = True
-    ) -> str:
+    def generate_report(self, template: ReportStructure, data: dict, format: ReportFormatEnum, output_path: str):
         """
-        生成报告
-        
-        Args:
-            template: 报告模板
-            data: 报告数据
-            format: 报告格式
-            output_path: 输出路径
-            include_toc: 是否包含目录
-            include_code_highlighting: 是否包含代码高亮
-            include_styles: 是否包含样式
-            include_charts: 是否包含图表
-            chart_data: 图表数据
-            use_cache: 是否使用缓存
-            
-        Returns:
-            str: 报告文件路径
-            
-        Raises:
-            ReportGenerationException: 生成报告失败
+        根据模板和数据生成报告内容。
+        这是一个简化的实现。
         """
         try:
-            # 计算缓存键
-            if use_cache:
-                cache_key = self._generate_cache_key(template, data, format, include_toc, 
-                                                    include_code_highlighting, include_styles,
-                                                    include_charts, chart_data)
-                cache_path = self.cache_dir / f"{cache_key}"
-                
-                # 检查缓存
-                if cache_path.exists():
-                    logger.info(f"从缓存加载报告：{cache_path}")
-                    
-                    # 确定输出路径
-                    if not output_path:
-                        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                        filename = f"report_{timestamp}"
-                        
-                        if format == ReportFormat.MARKDOWN:
-                            filename += ".md"
-                        elif format == ReportFormat.DOCX:
-                            filename += ".docx"
-                        elif format == ReportFormat.PDF:
-                            filename += ".pdf"
-                        
-                        output_path = str(self.reports_dir / filename)
-                    
-                    # 复制缓存文件到输出路径
-                    import shutil
-                    shutil.copy2(cache_path, output_path)
-                    
-                    return output_path
+            # 1. 使用Jinja2渲染模板
+            md_template_str = template.to_markdown()
+            jinja_template = jinja2.Template(md_template_str)
+            md_content = jinja_template.render(data)
             
-            # 获取模板内容
-            template_content = template.to_markdown()
-            
-            # 替换变量
-            report_content = self._replace_variables(template_content, data)
-            
-            # 如果需要目录，添加目录
-            if include_toc:
-                report_content = f"[TOC]\n\n{report_content}"
-            
-            # 确定输出路径
-            if not output_path:
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                filename = f"report_{timestamp}"
-                
-                if format == ReportFormat.MARKDOWN:
-                    filename += ".md"
-                elif format == ReportFormat.DOCX:
-                    filename += ".docx"
-                elif format == ReportFormat.PDF:
-                    filename += ".pdf"
-                
-                output_path = str(self.reports_dir / filename)
-            
-            # 根据格式生成报告
-            if format == ReportFormat.MARKDOWN:
-                # 直接保存Markdown内容
+            # 2. 根据格式进行转换和保存
+            if format == ReportFormatEnum.MARKDOWN:
                 with open(output_path, "w", encoding="utf-8") as f:
-                    f.write(report_content)
-                    
-                # 缓存报告
-                if use_cache:
-                    with open(cache_path, "w", encoding="utf-8") as f:
-                        f.write(report_content)
-                
-            elif format == ReportFormat.DOCX:
-                # 使用格式化服务将Markdown转换为DOCX
-                self.formatter.markdown_to_docx(
-                    report_content,
-                    output_path,
-                    include_toc=include_toc,
-                    include_code_highlighting=include_code_highlighting,
-                    include_styles=include_styles,
-                    include_charts=include_charts,
-                    chart_data=chart_data
-                )
-                
-                # 缓存报告
-                if use_cache:
-                    import shutil
-                    shutil.copy2(output_path, cache_path)
-                
-            elif format == ReportFormat.PDF:
-                # 先生成Markdown文件
-                md_path = output_path.replace(".pdf", ".md")
-                with open(md_path, "w", encoding="utf-8") as f:
-                    f.write(report_content)
-                
-                # 使用格式化服务将Markdown转换为PDF
-                self.formatter.markdown_to_pdf(
-                    report_content,
-                    output_path,
-                    include_toc=include_toc,
-                    include_code_highlighting=include_code_highlighting,
-                    include_styles=include_styles,
-                    include_charts=include_charts,
-                    chart_data=chart_data
-                )
-                
-                # 删除临时Markdown文件
-                if os.path.exists(md_path):
-                    os.remove(md_path)
-                
-                # 缓存报告
-                if use_cache:
-                    import shutil
-                    shutil.copy2(output_path, cache_path)
+                    f.write(md_content)
+                return output_path
+
+            # 对于PDF和DOCX，我们先将Markdown转为HTML
+            html_content = markdown.markdown(md_content, extensions=['tables', 'fenced_code'])
             
-            logger.info(f"报告已生成：{output_path}")
+            # 添加一些基础样式
+            html_with_style = f"""
+            <html>
+            <head>
+                <meta charset="UTF-8">
+                <style>
+                    body {{ font-family: 'SimSun', sans-serif; line-height: 1.6; }}
+                    h1, h2, h3 {{ color: #333; }}
+                    table {{ border-collapse: collapse; width: 100%; }}
+                    th, td {{ border: 1px solid #ddd; padding: 8px; }}
+                    th {{ background-color: #f2f2f2; }}
+                    code {{ font-family: 'Courier New', monospace; background-color: #eee; padding: 2px 4px; border-radius: 4px; }}
+                    pre > code {{ display: block; padding: 10px; }}
+                </style>
+            </head>
+            <body>
+                {html_content}
+            </body>
+            </html>
+            """
+
+            if format == ReportFormatEnum.PDF:
+                from weasyprint import HTML
+                # 直接将带样式的HTML字符串传递给weasyprint
+                HTML(string=html_with_style).write_pdf(output_path)
+                
+            elif format == ReportFormatEnum.DOCX:
+                try:
+                    import pypandoc
+                    # 使用pypandoc将HTML转换为docx
+                    pypandoc.convert_text(html_with_style, 'docx', format='html', outputfile=output_path)
+                except (ImportError, OSError, PandocNotFoundError) as e:
+                    self.logger.warning(f"pypandoc 未安装或未找到 Pandoc。DOCX 导出功能受限: {e}")
+                    raise ReportGenerationException("无法生成DOCX，缺少pypandoc或Pandoc。")
+            
             return output_path
-        
+
         except Exception as e:
-            logger.error(f"生成报告失败：{str(e)}")
-            import traceback
-            logger.error(traceback.format_exc())
-            raise ReportGenerationException(f"生成报告失败：{str(e)}")
-    
-    def _generate_cache_key(self, template: ReportTemplate, data: Dict[str, Any], 
-                           format: ReportFormat, include_toc: bool, 
+            self.logger.error(f"生成报告时发生未知错误: {e}", exc_info=True)
+            raise ReportGenerationException(f"生成报告失败：生成{format.value}时发生未知错误: {e}")
+    def _generate_cache_key(self, template: ReportStructure, data: Dict[str, Any], 
+                           format: ReportFormatEnum, include_toc: bool, 
                            include_code_highlighting: bool, include_styles: bool,
                            include_charts: bool, chart_data: Optional[Dict[str, Any]]) -> str:
         """
-        生成缓存键
+        为报告生成缓存键
         
         Args:
             template: 报告模板
@@ -696,21 +500,23 @@ class ReportService:
         Returns:
             str: 缓存键
         """
-        # 组合参数
-        cache_data = {
-            "template": template.to_dict(),
-            "data": data,
-            "format": str(format),
-            "include_toc": include_toc,
-            "include_code_highlighting": include_code_highlighting,
-            "include_styles": include_styles,
-            "include_charts": include_charts,
-            "chart_data": chart_data
-        }
-        
-        # 序列化并计算哈希
-        cache_str = json.dumps(cache_data, sort_keys=True)
-        return hashlib.md5(cache_str.encode('utf-8')).hexdigest() + f".{format}"
+        # 使用模板、数据和所有格式化选项的哈希值作为缓存键
+        # 确保数据字典是可预测的顺序
+        # 对非字符串类型进行稳健的序列化
+        try:
+            # 尝试使用可排序的json dump来标准化数据
+            data_str = json.dumps(data, sort_keys=True)
+        except TypeError:
+            # 如果失败，回退到简单的str表示
+            data_str = str(data)
+            
+        key_string = (
+            template.to_markdown() + 
+            data_str + 
+            f"{format.value}{include_toc}{include_code_highlighting}{include_styles}{include_charts}" +
+            json.dumps(chart_data, sort_keys=True) if chart_data else ""
+        )
+        return hashlib.md5(key_string.encode('utf-8')).hexdigest()
     
     def _replace_variables(self, content: str, data: Dict[str, Any]) -> str:
         """
@@ -789,26 +595,18 @@ class ReportService:
         return self.db.query(Report).filter(Report.id == report_id).first()
 
     def delete_report(self, report_id: int, user_id: int) -> Optional[Report]:
-        """
-        删除指定ID的报告
-        """
-        report = self.db.query(Report).filter(Report.id == report_id, Report.owner_id == user_id).first()
-        if not report:
-            return None
-        
-        # 可选：如果报告有关联的文件，也在这里处理删除逻辑
-        # import os
-        # if report.file_path and os.path.exists(report.file_path):
-        #     os.remove(report.file_path)
+        """删除一个报告，并确保只有所有者才能删除"""
+        report_to_delete = self.db.query(Report).filter(
+            Report.id == report_id, Report.owner_id == user_id
+        ).first()
 
-        self.db.delete(report)
-        self.db.commit()
-        return report
+        if report_to_delete:
+            self.db.delete(report_to_delete)
+            self.db.commit()
+        return report_to_delete
 
     def update_report_status(self, report_id: int, status: ReportStatusEnum) -> Optional[Report]:
-        """
-        更新报告状态
-        """
+        """更新报告状态"""
         report = self.db.query(Report).filter(Report.id == report_id).first()
         if not report:
             return None
@@ -819,41 +617,99 @@ class ReportService:
         return report
 
     def get_report(self, report_id: int, user_id: int) -> Optional[Report]:
-        """根据ID和用户ID获取报告"""
-        report = self.db.query(Report).filter(Report.id == report_id, Report.user_id == user_id).first()
+        """获取指定ID的报告，并验证用户权限"""
+        report = self.db.query(Report).filter(Report.id == report_id, Report.owner_id == user_id).first()
         return report
 
-    async def generate_and_get_pdf_path(self, report_id: int) -> str:
-        """为指定报告生成PDF并返回文件路径"""
-        
-        # 假设我们能通过 report_id 获取到报告的所有必需信息
-        # 在实际应用中，这里需要从数据库中获取报告、模板和数据
-        db_report = self.db.query(Report).filter(Report.id == report_id).first()
+    async def generate_and_get_pdf_path(self, report_id: int, user_id: int) -> tuple[str, str, str]:
+        """
+        为指定报告生成PDF（如果需要），并返回其文件路径、媒体类型和建议的文件名。
+        """
+        # 首先，获取报告
+        db_report = self.get_report(report_id, user_id)
         if not db_report:
-            raise ReportGenerationException(f"ID为 {report_id} 的报告未找到")
+            raise HTTPException(status_code=404, detail="报告未找到")
 
-        # 1. 获取模板
-        # 假设 template_name 存储在 db_report.template_name 或类似字段
-        template = self.get_template_by_name(db_report.template_name)
+        # 检查报告格式是否为PDF
+        if db_report.format != ReportFormatEnum.PDF:
+            # 如果不是PDF，可以抛出异常或尝试转换（取决于业务逻辑）
+            # 这里我们简单地认为只有请求PDF格式的报告才能下载
+            raise HTTPException(status_code=400, detail="此报告不是PDF格式，无法下载")
 
-        # 2. 准备数据
-        # 实际情况会更复杂，需要聚合多个数据源
-        competition_data = self.db.query(Competition).filter(Competition.id == db_report.competition_id).first()
-        user_data = self.db.query(User).filter(User.id == db_report.user_id).first()
+        filename = f"report_{db_report.id}_{datetime.now().strftime('%Y%m%d')}.pdf"
+        cache_file_path = self.cache_dir / filename
         
-        report_data = {
-            "project_name": competition_data.name if competition_data else "N/A",
-            "team_name": "示例团队", # 示例数据
-            "student_name": user_data.username if user_data else "N/A",
-            "student_id": "0000001", # 示例数据
-            "date": datetime.now().strftime("%Y-%m-%d"),
-            "competition": competition_data.to_dict() if competition_data else {},
-        }
+        # 暂时跳过缓存检查，始终重新生成以进行调试
+        # if cache_file_path.exists():
+        #     return str(cache_file_path), "application/pdf", filename
+
+        # 假设我们总是为PDF报告重新生成或查找
+        # 1. 获取模板
+        try:
+            # 确保通过 relationship 获取模板名称
+            if not db_report.template:
+                raise ReportGenerationException("报告缺少关联的模板")
+            template_name = db_report.template.title
+            template = self.get_template_by_name(template_name)
+        except FileNotFoundError:
+            raise ReportGenerationException(f"报告模板 '{template_name}' 未找到")
+        except Exception as e:
+            logger.error(f"获取报告模板时出错: {e}", exc_info=True)
+            raise ReportGenerationException(f"获取报告模板时出错: {e}")
+
+        # 2. 准备报告数据
+        # 实际情况会更复杂，需要聚合多个数据源
+        # 准备上下文数据
+        try:
+            competition_ids = db_report.extra_info.get("competition_ids", [])
+            if not competition_ids:
+                raise ReportGenerationException("报告的 'extra_info' 中缺少 'competition_ids'")
+                
+            # 我们这里只用第一个竞赛的信息作为示例
+            competition_id = competition_ids[0]
+            competition = self.db.query(Competition).filter(Competition.id == competition_id).first()
+            if not competition:
+                raise ReportGenerationException(f"找不到ID为 {competition_id} 的竞赛")
+
+            context = {
+                "report_title": db_report.title,
+                "competition_name": competition.title,
+                "start_date": competition.start_date.strftime('%Y-%m-%d') if competition.start_date else "N/A",
+                "end_date": competition.end_date.strftime('%Y-%m-%d') if competition.end_date else "N/A",
+                "project_type": "Web应用", # 示例值
+                "project_goal": "开发一个功能完整的Web应用", # 示例值
+                "project_start_date": "2023-01-01", # 示例值
+                "project_end_date": "2023-12-31", # 示例值
+                "project_background": "本项目是基于Flask框架开发的Web应用，旨在提供一个高效、可靠的在线学习平台。",
+                "frontend_tech": "HTML5, CSS3, JavaScript, Bootstrap",
+                "backend_tech": "Python, Flask, SQLAlchemy, PostgreSQL",
+                "database_tech": "PostgreSQL, Redis",
+                "deployment_tech": "Docker, Nginx, Gunicorn",
+                "other_tools": "Git, Jira, Postman",
+                "system_architecture_description": "本项目采用前后端分离架构，前端使用HTML5、CSS3和JavaScript构建，后端使用Python Flask框架处理请求。",
+                "system_components": "前端：HTML5页面，CSS3样式，JavaScript交互；后端：Flask应用，数据库连接，API接口。",
+                "data_flow": "用户请求 -> 前端处理 -> 后端API -> 数据库查询/更新 -> 响应返回",
+                "features_description": "本项目实现了用户注册、登录、课程浏览、课程详情、课程购买等功能。",
+                "implementation_details": "项目采用MVC架构，使用Flask框架处理请求，SQLAlchemy进行数据库操作，Redis缓存热点数据。",
+                "key_algorithms": "用户认证：JWT令牌生成与验证；课程推荐：基于协同过滤的推荐算法。",
+                "challenges_and_solutions": "挑战：数据库连接池管理；解决方案：使用SQLAlchemy连接池，Redis缓存热点数据。",
+                "testing_methodology": "采用单元测试和集成测试相结合的方式，使用pytest框架。",
+                "testing_results": "所有API接口均已通过测试，性能表现良好。",
+                "performance_evaluation": "系统响应时间小于1秒，并发处理能力达到1000QPS。",
+                "conclusion": "本项目成功开发了一个功能完整的Web应用，满足了用户需求。",
+                "future_work": "未来可以考虑添加更多课程内容，优化推荐算法，提升用户体验。",
+                "references": "项目文档：https://github.com/example/project-docs",
+                "appendix": "附录：项目源代码、数据库结构、API文档"
+            }
+        except Exception as e:
+            logger.error(f"准备报告数据时出错: {e}", exc_info=True)
+            raise ReportGenerationException(f"准备报告数据时出错: {e}")
 
         # 3. 调用核心生成方法
         pdf_path = self.generate_report(
             template=template,
-            data=report_data,
-            format=ReportFormat.PDF
+            data=context,
+            format=ReportFormatEnum.PDF,
+            output_path=str(cache_file_path)
         )
-        return pdf_path 
+        return pdf_path, "application/pdf", filename 

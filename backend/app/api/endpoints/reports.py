@@ -82,27 +82,22 @@ async def download_report(
     """
     report_service_instance = report_service.ReportService(db)
     
-    # 1. 获取报告
-    db_report = report_service_instance.get_report(report_id=report_id, user_id=current_user.id)
-    if not db_report:
-        raise HTTPException(status_code=404, detail="报告未找到或您没有权限访问")
-
-    # 2. 生成PDF报告
     try:
-        # 假设报告服务有一个方法可以生成PDF并返回路径
-        pdf_path = await report_service_instance.generate_and_get_pdf_path(report_id=report_id)
+        # 调用服务层方法，该方法会处理查找、生成和路径返回
+        file_path, media_type, filename = await report_service_instance.generate_and_get_pdf_path(
+            report_id=report_id, user_id=current_user.id
+        )
         
-        # 3. 返回文件响应
-        if not os.path.exists(pdf_path):
-            raise HTTPException(status_code=404, detail="生成的PDF文件未找到")
-        
-        report_filename = f"report_{db_report.competition.name}_{report_id}.pdf"
+        if not os.path.exists(file_path):
+            raise HTTPException(status_code=404, detail="生成的报告文件未找到")
         
         return FileResponse(
-            path=pdf_path,
-            filename=report_filename,
-            media_type='application/pdf'
+            path=file_path,
+            filename=filename,
+            media_type=media_type
         )
+    except HTTPException as http_exc:
+        raise http_exc # 重新抛出已知的HTTP异常
     except Exception as e:
-        # 这里的异常处理可以更精细
+        # 捕获其他未知异常
         raise HTTPException(status_code=500, detail=f"报告生成失败: {str(e)}") 

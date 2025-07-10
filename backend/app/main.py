@@ -81,4 +81,18 @@ async def shutdown_event():
     """
     应用关闭事件
     """
-    logger.info("应用关闭") 
+    logger.info("应用关闭")
+
+
+def start():
+    """
+    启动Uvicorn服务器
+    """
+    import uvicorn
+    uvicorn.run(
+        "backend.app.main:app",
+        host="127.0.0.1",
+        port=8000,
+        reload=True,
+        log_level="info"
+    ) 

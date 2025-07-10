@@ -162,8 +162,10 @@ const downloadFile = async (url, filename) => {
 
 // 处理下载报告
 const handleDownload = async (report) => {
-  const downloadUrl = `/api/v1/reports/download/${report.id}`;
-  const filename = `report_${report.id}.pdf`; // 您可以根据报告标题生成更友好的文件名
+  // 确保我们获取的是一个纯数字ID
+  const reportId = String(report.id).split(':')[0]; 
+  const downloadUrl = `/api/v1/reports/download/${reportId}`;
+  const filename = `report_${reportId}.pdf`; // 您可以根据报告标题生成更友好的文件名
   await downloadFile(downloadUrl, filename);
 }
 

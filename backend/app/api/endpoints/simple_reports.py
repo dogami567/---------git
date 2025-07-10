@@ -10,10 +10,12 @@ from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, Field
 
-from backend.app.api.deps import get_db
+from backend.app.api import deps
 from backend.app.core.exceptions import handle_exceptions, ReportGenerationException
-from backend.app.services.report_service import ReportService, ReportTemplate, ReportSection, ReportFormat
-from backend.app.schemas.report import ReportFormatEnum, GenerateReportResponse
+from backend.app.services.report_service import ReportService, ReportStructure, StructureSection
+from backend.app.models.report import ReportFormatEnum
+from backend.app.schemas.report import GenerateReportResponse
+from datetime import datetime
 
 
 class TextBlock(BaseModel):
@@ -44,13 +46,12 @@ class ReportContentSection(BaseModel):
     elements: List[Dict[str, Any]] # 可以是TextBlock, ImageBlock, ListBlock等
 
 class SimpleReportRequest(BaseModel):
-    title: str
-    sections: List[ReportContentSection]
+    title: str = Field(..., example="我的简单报告")
+    content: str = Field(..., example="这是报告的主要内容。")
 
 class SimpleReportResponse(BaseModel):
-    report_id: int
-    file_path: Optional[str] = None
     message: str
+    report_path: str
 
 
 # 瑙ｅ喅寰幆寮曠敤
@@ -60,78 +61,37 @@ ReportContentSection.update_forward_refs()
 router = APIRouter()
 
 
-@router.post("/generate", response_model=GenerateReportResponse)
+@router.post("/simple-report", response_model=GenerateReportResponse)
 @handle_exceptions
-async def generate_simple_report(
+async def create_simple_report(
     request: SimpleReportRequest,
     background_tasks: BackgroundTasks,
-    db: Session = Depends(get_db)
+    db: Session = Depends(deps.get_db),
 ):
     """
-    鐢熸垚绠€鍖栨姤鍛?
-    
-    浣跨敤绠€鍖栫殑璇锋眰鏍煎紡鐢熸垚鎶ュ憡銆傛敮鎸丮arkdown鍜孌OCX鏍煎紡銆?
+    一个简单的端点，用于快速生成包含标题和内容的PDF报告。
     """
-    # 鍒涘缓鎶ュ憡鏈嶅姟
     report_service = ReportService(db)
     
-    # 鍒涘缓妯℃澘
-    template = ReportTemplate(
-        title=request.title,
-        description=request.description
+    # 1. 创建一个临时的报告结构
+    template = ReportStructure(title=request.title)
+    template.add_section(StructureSection(title="主要内容", content=request.content))
+    
+    # 2. 定义报告元数据
+    report_data = {
+        "report_title": request.title,
+        "generation_date": datetime.now().strftime("%Y-%m-%d"),
+    }
+    
+    # 3. 使用后台任务生成报告
+    background_tasks.add_task(
+        report_service.generate_report,
+        template=template,
+        data=report_data,
+        format=ReportFormatEnum.PDF, # 强制PDF格式
+        output_dir_name="simple_reports" # 指定单独的输出目录
     )
-    
-    # 娣诲姞閮ㄥ垎
-    for section_data in request.sections:
-        section = ReportSection(
-            title=section_data.title,
-            content=section_data.content,
-            level=section_data.level
-        )
-        template.add_section(section)
-    
-    # 纭畾鎶ュ憡鏍煎紡
-    report_format = ReportFormat.MARKDOWN
-    if request.format.lower() == "docx":
-        report_format = ReportFormat.DOCX
-    
-    # 鑾峰彇鏍煎紡鍖栭€夐」
-    formatting_options = request.formatting_options
-    include_toc = formatting_options.get("include_toc", True)
-    include_code_highlighting = formatting_options.get("include_code_highlighting", True)
-    include_styles = formatting_options.get("include_styles", True)
-    include_charts = formatting_options.get("include_charts", False)
-    
-    # 鐢熸垚鎶ュ憡
-    try:
-        output_path = report_service.generate_report(
-            template=template,
-            data=request.data,
-            format=report_format,
-            include_toc=include_toc,
-            include_code_highlighting=include_code_highlighting,
-            include_styles=include_styles,
-            include_charts=include_charts
-        )
-        
-        # 鑾峰彇鏂囦欢鍚?
-        file_name = os.path.basename(output_path)
-        
-        # 杩斿洖缁撴灉
-        return GenerateReportResponse(
-            success=True,
-            message="鎶ュ憡鐢熸垚鎴愬姛",
-            file_path=output_path,
-            file_name=file_name,
-            format=ReportFormatEnum.MARKDOWN if report_format == ReportFormat.MARKDOWN else ReportFormatEnum.DOCX
-        )
-    except ReportGenerationException as e:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"鎶ュ憡鐢熸垚澶辫触: {str(e)}"
-        )
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"鏈嶅姟鍣ㄩ敊璇? {str(e)}"
-        ) 
+
+    return {"message": "简单报告生成任务已启动，请稍后查看'reports/simple_reports'目录。"}
+
+# ... (保留其他可能存在的路由) 
